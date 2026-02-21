@@ -116,7 +116,19 @@ tickers = [
     "NVDA",    # High growth/volatility
     "KO",      # Low volatility
     "JPM",     # Financials
-    "GLD"     # Commodities
+    "GLD",     # Commodities
+    "ALGN",    # Align Tech
+    "REGN",    # United Rentals
+    "URI",     # Commodities
+    "AMZN",    # Amazaon
+    "ULTA",    # Ulta
+    "AVGO",    # Broadcom
+    "ANET",    # Arista Networks
+    "AXON",    # Axon
+    "XOM",     # Exon
+    "CVX",     # Cheveron
+    "SHEL",    # Shell
+
 ]
 
 
