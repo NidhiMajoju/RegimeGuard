@@ -4,189 +4,160 @@ import numpy as np
 import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 
+
 class RegimeDetector:
-    """
-    Gaussian HMM for market regime detection.
-    Features: log_return, rolling_vol_*, drawdown
-    """
+
     def __init__(
         self,
-        n_regimes: int = 3,
         covariance_type: str = "full",
         random_state: int = 42,
     ):
-        self.n_regimes = n_regimes
+        self.n_regimes = 3
+
+        self.feature_cols = [
+            "log_returns",
+            "rolling_vol",
+            "drawdown",
+            "realized_vol",
+            "price_momentum",
+            "vol_ratio",
+            "close_to_sma",
+        ]
+
         self.model = GaussianHMM(
-            n_components=n_regimes,
+            n_components=self.n_regimes,
             covariance_type=covariance_type,
             random_state=random_state,
         )
 
-    def _build_feature_matrix(self, df: pd.DataFrame) -> Tuple[np.ndarray, pd.Index]:
-        # Prefer 'log_returns' (from preprocess), fallback to 'log_return'
-        ret_col = "log_returns" if "log_returns" in df.columns else "log_return"
-        vol_cols = [c for c in df.columns if c.startswith("rolling_vol")]
-        vol_col = vol_cols[0] if vol_cols else "rolling_vol"
-        dd_col = "drawdown"
+    def _build_feature_matrix(self, df: pd.DataFrame):
 
-        feature_cols = [ret_col, vol_col, dd_col]
-        for col in feature_cols:
-            if col not in df.columns:
-                raise ValueError(f"DataFrame must contain feature column: {col}")
+        missing = [col for col in self.feature_cols if col not in df.columns]
+        if missing:
+            raise ValueError(f"Missing required feature columns: {missing}")
 
-        valid = df[feature_cols].dropna()
-        valid_idx = valid.index
+        valid = df[self.feature_cols].dropna()
         X = valid.values.astype(np.float64)
-        return X, valid_idx
 
-    def fit_and_predict(self, df: pd.DataFrame) -> pd.Series:
+        return X, valid.index
+
+    def fit_and_predict(self, df: pd.DataFrame):
+
         X, valid_idx = self._build_feature_matrix(df)
+
         self.model.fit(X)
         labels = self.model.predict(X)
+
         return pd.Series(labels, index=valid_idx, name="regime")
 
     @staticmethod
-    def compute_regime_stats(df: pd.DataFrame, regimes: pd.Series) -> pd.DataFrame:
-        ret_col = "log_returns" if "log_returns" in df.columns else "log_return"
-        combined = pd.DataFrame({"return": df[ret_col], "regime": regimes}).dropna()
-        
+    def compute_regime_stats(df: pd.DataFrame, regimes: pd.Series):
+
+        combined = pd.DataFrame({
+            "return": df["log_returns"],
+            "regime": regimes
+        }).dropna()
+
         if combined.empty:
             return pd.DataFrame()
 
         ann = np.sqrt(252)
+
         stats = (
             combined.groupby("regime")["return"]
             .agg(mean_return="mean", vol="std", count="size")
             .reset_index()
         )
+
         stats["sharpe_ann"] = np.where(
-            stats["vol"].gt(0),
+            stats["vol"] > 0,
             ann * stats["mean_return"] / stats["vol"],
             np.nan,
         )
+
         return stats
 
-    def interpret_regimes(self, stats: pd.DataFrame) -> Dict[int, str]:
-        """
-        Logic:
-        - High Mean Return + Low Vol = Bull
-        - Low/Negative Mean Return + High Vol = Bear
-        - Middle = Sideways
-        """
-        if stats.empty:
-            return {}
-        
-        # Sort by mean return to identify regimes
-        # Highest mean = Bull, Lowest mean = Bear, Middle = Sideways
-        sorted_stats = stats.sort_values("mean_return", ascending=False).reset_index()
-        
+    def interpret_regimes(self, stats: pd.DataFrame):
+
+        if len(stats) != 3:
+            raise ValueError("Model must produce exactly 3 regimes.")
+
+        stats = stats.copy()
+
+        # -----------------------------
+        # SCORE-BASED METHOD
+        # -----------------------------
+        stats["score"] = stats["mean_return"] - 0.5 * stats["vol"]
+        stats_sorted = stats.sort_values("score", ascending=False)
+
+        # -----------------------------
+        # MEAN-RETURN METHOD
+        # -----------------------------
+        # stats_sorted = stats.sort_values("mean_return", ascending=False)
+
+        stats_sorted = stats_sorted.reset_index(drop=True)
+
         mapping = {
-            sorted_stats.iloc[0]["regime"]: "Bull",
-            sorted_stats.iloc[1]["regime"]: "Sideways",
-            sorted_stats.iloc[2]["regime"]: "Bear"
+            int(stats_sorted.iloc[0]["regime"]): "Bull",
+            int(stats_sorted.iloc[1]["regime"]): "Sideways",
+            int(stats_sorted.iloc[2]["regime"]): "Bear",
         }
+
         return mapping
 
-    def segment_data_by_regime(self, df: pd.DataFrame, returns_col='returns', vol_col='realized_vol') -> Dict[int, pd.DataFrame]:
-        """
-        Segment DataFrame by detected regimes
-        """
-        
-        if 'regime' not in df.columns:
-            raise ValueError("DataFrame must contain 'regime' column")
-        
-        regime_dict = {}
-        for regime_id in df['regime'].unique():
-            if pd.notna(regime_id):
-                regime_dict[int(regime_id)] = df[df['regime'] == regime_id].copy()
-        
-        return regime_dict
 
-def run_regime_detection(
-    input_path: str,
-    labels_output_path: str = "data/processed/regime_labels.csv",
-    stats_output_path: str = "data/reports/regime_characteristics.csv",
-    n_regimes: int = 3,
-) -> Tuple[pd.Series, pd.DataFrame]:
-    
+def run_regime_detection(input_path: str, output_dir: str):
+
     df = pd.read_csv(input_path)
-    # Date handling
+
     for cand in ["Date", "date", "datetime"]:
         if cand in df.columns:
             df[cand] = pd.to_datetime(df[cand])
             df = df.set_index(cand).sort_index()
             break
 
-    detector = RegimeDetector(n_regimes=n_regimes)
+    detector = RegimeDetector()
+
     regimes = detector.fit_and_predict(df)
     stats = detector.compute_regime_stats(df, regimes)
-
-    # Use the logic to label them
     mapping = detector.interpret_regimes(stats)
+
     regime_names = regimes.map(mapping)
 
-    # Save Results
-    os.makedirs(os.path.dirname(labels_output_path), exist_ok=True)
-    os.makedirs(os.path.dirname(stats_output_path), exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
 
-    output_df = pd.DataFrame({"regime_id": regimes, "regime_name": regime_names})
-    output_df.to_csv(labels_output_path)
+    labels_path = os.path.join(output_dir, f"{base_name}_regime_labels.csv")
+    stats_path = os.path.join(output_dir, f"{base_name}_regime_stats.csv")
 
+    labels_df = pd.DataFrame({
+        "regime_id": regimes,
+        "regime_name": regime_names
+    })
+
+    labels_df.to_csv(labels_path)
     stats["regime_label"] = stats["regime"].map(mapping)
-    stats.to_csv(stats_output_path, index=False)
+    stats.to_csv(stats_path, index=False)
 
-    return regimes, stats
+    print(f"Processed: {base_name}")
 
 
 if __name__ == "__main__":
-    # Example: Run regime detection on a processed dataset
-    input_file = "data/processed/SPY_processed.csv"
-    
-    if os.path.exists(input_file):
-        regimes, stats = run_regime_detection(input_file)
-        
-        # Add regimes to dataframe for segmentation
-        df = pd.read_csv(input_file)
-        for cand in ["Date", "date", "datetime"]:
-            if cand in df.columns:
-                df[cand] = pd.to_datetime(df[cand])
-                df = df.set_index(cand).sort_index()
-                break
-        
-        df['regime'] = regimes
-        
-        # Segment data by regime
-        detector = RegimeDetector(n_regimes=3)
-        regime_segments = detector.segment_data_by_regime(df, returns_col='log_returns', vol_col='rolling_vol_20')
-        
-        # Print per-regime statistics
-        print("\n" + "="*70)
-        print("PER-REGIME STATISTICS")
-        print("="*70)
-        
-        ret_col = "log_returns" if "log_returns" in df.columns else "log_return"
-        vol_col = "rolling_vol_20" if "rolling_vol_20" in df.columns else "rolling_vol"
-        
-        for regime_id, regime_df in sorted(regime_segments.items()):
-            print(f"\nRegime {regime_id}:")
-            print(f"  Sample count: {len(regime_df)}")
-            
-            # Mean return
-            mean_return = regime_df[ret_col].mean()
-            print(f"  Mean return: {mean_return:.6f}")
-            
-            # Mean volatility
-            mean_vol = regime_df[vol_col].mean()
-            print(f"  Mean volatility: {mean_vol:.6f}")
-            
-            # Sharpe ratio (mean / std)
-            std_return = regime_df[ret_col].std()
-            if std_return > 0:
-                sharpe = mean_return / std_return
-                print(f"  Sharpe ratio: {sharpe:.6f}")
-            else:
-                print(f"  Sharpe ratio: N/A (zero std)")
-        
-        print("\n" + "="*70)
-    else:
-        print(f"File not found: {input_file}")
+
+    processed_folder = "data/processed"
+    output_folder = "data/regime_output"
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    csv_files = [
+        f for f in os.listdir(processed_folder)
+        if f.endswith(".csv")
+    ]
+
+    if not csv_files:
+        print("No CSV files found in processed folder.")
+
+    for file in csv_files:
+        file_path = os.path.join(processed_folder, file)
+        run_regime_detection(file_path, output_folder)
+
+    print("\nAll files processed successfully.\n")
