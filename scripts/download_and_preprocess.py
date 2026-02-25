@@ -4,6 +4,8 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import ta
+from sklearn.preprocessing import StandardScaler
 
 
 
@@ -83,7 +85,48 @@ def compute_drawdown( df: pd.DataFrame, price_col: str = "Adj Close",) -> pd.Ser
     drawdown = (df[price_col] / rolling_max) - 1
 
     return drawdown
+
+def normalize_features(df: pd.DataFrame, feature_cols, fit=True, scaler=None) -> pd.DataFrame:
+    """
+    Normalize selected features using StandardScaler.
     
+    If fit=True, fit the scaler on the data and return 
+    the scaled DataFrame and the fitted scaler.
+    
+    If fit=False, use the provided scaler to transform 
+    the data and return the scaled DataFrame.
+    """
+    # fit scaler on train, transform on val/test
+    if fit:
+        scaler = StandardScaler()
+        df_scaled = df.copy()
+        df_scaled[feature_cols] = scaler.fit_transform(df[feature_cols])
+        return df_scaled, scaler
+    else:
+        if scaler is None:
+            raise ValueError("When fit=False, a scaler must be provided.")
+        df_scaled = df.copy()
+        df_scaled[feature_cols] = scaler.transform(df[feature_cols])
+        return df_scaled
+
+    
+
+def create_sequences(df: pd.DataFrame, seq_length: int =60, forecast_horizon: int = 1, target_col: str = 'Adj Close') -> Tuple:
+    """
+    Create sequences for time series forecasting.    
+    """    
+    # Extract target and feature values
+    target = df[target_col].values
+    features = df.drop(columns=[target_col]).values
+
+    X, y = [], []
+    for i in range(len(df) - seq_length - forecast_horizon + 1):
+        X.append(features[i:i+seq_length])
+        y.append(target[i+seq_length+forecast_horizon-1])
+
+    return np.array(X), np.array(y)
+
+
 def preprocess_single_ticker(ticker: str, output_dir: str = "data/processed", vol_window: int = 20, ) -> Tuple[str, pd.DataFrame]:
     """
     Load raw <ticker> CSV, clean it, compute features, and save processed CSV.
@@ -92,9 +135,51 @@ def preprocess_single_ticker(ticker: str, output_dir: str = "data/processed", vo
     path = download_data(ticker)
     df = pd.read_csv(path)
     df = basic_clean(df)
-    df["log_returns"] = compute_log_returns(df)
-    df["rolling_vol"] = compute_rolling_vol(df["log_returns"], window=vol_window)
+
+
+    df['log_returns'] = compute_log_returns(df)
+    df['rolling_vol'] = compute_rolling_vol(df["log_returns"], window=vol_window)
     df["drawdown"] = compute_drawdown(df)
+    
+    # price returns 
+    df['returns'] = df['Adj Close'].pct_change()
+    
+    # momentum indicators
+    df['rsi_14'] = ta.momentum.RSIIndicator(close=df['Adj Close'], window=14).rsi()
+    df['macd'] = ta.trend.MACD(close= df['Adj Close']).macd_diff()
+    df['stoch_k'] = ta.momentum.StochasticOscillator(
+        high=df['High'], low=df['Low'], close=df['Adj Close'], window=14
+    ).stoch()
+    
+    # volatility indicators
+    df['atr_14'] = ta.volatility.AverageTrueRange(
+         high=df['High'], low=df['Low'], close=df['Adj Close'], window=14
+    ).average_true_range()
+
+    # Bollinger Bands
+    bb = ta.volatility.BollingerBands(close=df['Adj Close'], window=20, window_dev=2)
+    df['bb_upper'] = bb.bollinger_hband()
+    df['bb_lower'] = bb.bollinger_lband()
+    
+    # Realized volatility (20-day rolling std of returns)
+    df['realized_vol'] = df['returns'].rolling(20).std()
+    
+    # Simple moving averages
+    df['sma_20'] = df['Adj Close'].rolling(20).mean()
+    df['sma_50'] = df['Adj Close'].rolling(50).mean()
+    
+    # Exponential moving average
+    df['ema_12'] = df['Adj Close'].ewm(span=12, adjust=False).mean()
+    
+    # Price momentum (5-day return)
+    df['price_momentum'] = df['Adj Close'].pct_change(periods=5)
+    
+    # volatility ratio
+    df['vol_ratio'] = df['realized_vol'] / df['realized_vol'].rolling(30).mean()
+
+    # Close to SMA ratio
+    df['close_to_sma'] = (df['Adj Close'] - df['sma_20']) / df['sma_20']
+    
     
     # drop NaN values produced by rolling volatility 
     df = df.dropna()
@@ -112,15 +197,11 @@ tickers = [
     "SPY",     # Market baseline
     "QQQ",     # Tech
     "TLT",     # Bonds 
-    "AAPL",    # Mega cap tech
-    "NVDA",    # High growth/volatility
     "KO",      # Low volatility
     "JPM",     # Financials
     "GLD",     # Commodities
-    "ALGN",    # Align Tech
     "REGN",    # United Rentals
     "URI",     # Commodities
-    "AMZN",    # Amazaon
     "ULTA",    # Ulta
     "AVGO",    # Broadcom
     "ANET",    # Arista Networks
@@ -128,7 +209,64 @@ tickers = [
     "XOM",     # Exon
     "CVX",     # Cheveron
     "SHEL",    # Shell
-
+    "ADBE",
+    "BAC",
+    "WFC",
+    "GS",
+    "MS",
+    "AXP",
+    "CAT",
+    "BA",
+    "HON",
+    "MMM",
+    "DD",
+    "JNJ",
+    "PFE",
+    "MRK",
+    "UNH",
+    "WMT",
+    "HD",
+    "NKE",
+    "MCD",
+    "SBUX",
+    "COP",
+    "V",
+    "MA",
+    "PG",
+    "PEP",
+    "CSCO",
+    "SCHW",
+    "BLK",
+    "MKTX",
+    "ABBV",
+    "AMGN",
+    "LLY",
+    "ISRG",
+    "BIIB",
+    "GILD",
+    "MNST",
+    "DE",
+    "ETN",
+    "LIN",
+    "U",
+    "INTU",
+    "TTD",
+    "COST",
+    "LMT",
+    "XLE",
+    "XLRE",
+    "XLU",
+    "VO",
+    "IJR",
+    "VWO",
+    "VEA",
+    "VXX",
+    "UVXY",
+    "TIP",
+    "DBC",
+    "LQD",
+    "HYG",
+    "JNK"
 ]
 
 
