@@ -194,21 +194,21 @@ def preprocess_single_ticker(ticker: str, output_dir: str = "data/processed", vo
 
 
 tickers = [
-    "SPY",     # Market baseline
-    "QQQ",     # Tech
-    "TLT",     # Bonds 
-    "KO",      # Low volatility
-    "JPM",     # Financials
-    "GLD",     # Commodities
-    "REGN",    # United Rentals
-    "URI",     # Commodities
-    "ULTA",    # Ulta
-    "AVGO",    # Broadcom
-    "ANET",    # Arista Networks
-    "AXON",    # Axon
-    "XOM",     # Exon
-    "CVX",     # Cheveron
-    "SHEL",    # Shell
+    "SPY",     
+    "QQQ",     
+    "TLT",     
+    "KO",      
+    "JPM",     
+    "GLD",     
+    "REGN",    
+    "URI",     
+    "ULTA",    
+    "AVGO",    
+    "ANET",    
+    "AXON",    
+    "XOM",     
+    "CVX",     
+    "SHEL",    
     "ADBE",
     "BAC",
     "WFC",
@@ -272,4 +272,6 @@ tickers = [
 
 for ticker in tickers:
     preprocess_single_ticker(ticker)
+
+
 
